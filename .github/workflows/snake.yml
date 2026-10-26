@@ -12,12 +12,109 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Generate snake animation
-        uses: Platane/snk/svg-only@v3
-        with:
-          github_user_name: ${{ github.repository_owner }}
-          outputs: |
-            dist/github-contribution-grid-snake-dark.svg?palette=github-dark&color_snake=blueviolet
+      - name: Generate growing violet snake
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROFILE_USER: ${{ github.repository_owner }}
+        run: |
+          python3 - <<'PY'
+          """Render a growing contribution snake using only the Python standard library."""
+          import json
+          import os
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+          
+          
+          def fetch_weeks():
+              query = '''query($login:String!){user(login:$login){contributionsCollection{
+                contributionCalendar{weeks{contributionDays{date contributionCount}}}
+              }}}}'''
+              payload = json.dumps({"query": query, "variables": {"login": os.environ["PROFILE_USER"]}})
+              request = Request("https://api.github.com/graphql", data=payload.encode(), headers={
+                  "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                  "Content-Type": "application/json", "User-Agent": "growing-profile-snake"})
+              with urlopen(request, timeout=30) as response:
+                  data = json.load(response)
+              if data.get("errors") or not data.get("data", {}).get("user"):
+                  raise RuntimeError("GitHub contribution calendar could not be retrieved")
+              return data["data"]["user"]["contributionsCollection"]["contributionCalendar"]["weeks"]
+          
+          
+          def render(weeks):
+              from datetime import date
+              cells = {}
+              for x, week in enumerate(weeks):
+                  for day in week["contributionDays"]:
+                      y = (date.fromisoformat(day["date"]).weekday() + 1) % 7
+                      cells[(x + 1, y)] = day["contributionCount"]
+              # A row-by-row route visits every tile once. No shortcuts can cross the body.
+              route = [(0, 0), (0, 1), (0, 2)]
+              for y in range(7):
+                  columns = range(1, len(weeks) + 1) if y % 2 == 0 else range(len(weeks), 0, -1)
+                  route.extend((x, y) for x in columns)
+              # Start the three-segment body immediately to the left of the first row.
+              route[:3] = [(0, 2), (0, 1), (0, 0)]
+              assert len(set(route)) == len(route)
+              assert all(abs(a[0]-b[0]) + abs(a[1]-b[1]) == 1 for a, b in zip(route, route[1:]))
+              body = route[:3][::-1]
+              eaten = set()
+              snapshots = [(list(body), set(eaten))]
+              for point in route[3:]:
+                  grows = cells.get(point, 0) > 0
+                  body.insert(0, point)
+                  if grows:
+                      eaten.add(point)
+                  else:
+                      body.pop()
+                  assert len(body) == 3 + len(eaten)
+                  assert len(set(body)) == len(body)
+                  snapshots.append((list(body), set(eaten)))
+              # Pause at the full size before the animation loops back to its initial state.
+              snapshots.extend([snapshots[-1]] * 18)
+              frame_count = len(snapshots)
+              duration = round(frame_count * 0.075, 3)
+              width, height = (len(weeks) + 1) * 16 + 24, 174
+              colors = ["#161b22", "#0e4429", "#006d32", "#26a641", "#39d353"]
+              maximum = max(cells.values(), default=1) or 1
+              def tile_color(count):
+                  return colors[0 if count == 0 else min(4, 1 + int(3 * count / maximum))]
+              def animation(attribute, sequence):
+                  keys, values = ["0"], [sequence[0]]
+                  for i in range(1, frame_count):
+                      if sequence[i] != sequence[i-1]:
+                          keys.append(f"{i/frame_count:.6f}")
+                          values.append(sequence[i])
+                  keys.append("1")
+                  values.append(sequence[-1])
+                  return (f'<animate attributeName="{attribute}" dur="{duration}s" repeatCount="indefinite" '
+                          f'calcMode="discrete" keyTimes="{";".join(keys)}" values="{";".join(values)}"/>')
+              frames = []
+              for segments, consumed in snapshots:
+                  state = {p: colors[0] if p in consumed else tile_color(n) for p, n in cells.items()}
+                  for index, point in enumerate(segments):
+                      state[point] = "#a78bfa" if index == 0 else "#8b5cf6" if index < 4 else "#6d28d9"
+                  frames.append(state)
+              out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title desc">',
+                     '<title id="title">Growing violet contribution snake</title>',
+                     '<desc id="desc">The snake grows one segment for each occupied contribution day it eats. It follows a non-crossing route and restarts after clearing the calendar.</desc>',
+                     f'<rect width="{width}" height="{height}" rx="10" fill="#0d1117"/>',
+                     '<text x="16" y="22" fill="#a78bfa" font-family="monospace" font-size="12">CONTRIBUTION SNAKE · GROWS AS IT EATS</text>']
+              for point in sorted(set(route) | set(cells)):
+                  x, y = point
+                  values = [state.get(point, "#0d1117") for state in frames]
+                  out.append(f'<rect x="{12+x*16}" y="{36+y*16}" width="12" height="12" rx="3" fill="{values[0]}">')
+                  out.append(animation("fill", values))
+                  out.append('</rect>')
+              out.extend(['<text x="16" y="163" fill="#8b949e" font-family="monospace" font-size="10">1 occupied day eaten = 1 new segment</text>', '</svg>'])
+              return "\n".join(out)
+          
+          
+          if __name__ == "__main__":
+              target = Path("dist/github-contribution-grid-snake-dark.svg")
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_text(render(fetch_weeks()), encoding="utf-8")
+              print("Generated growing violet snake:", target)
+          PY
 
       - name: Publish animation
         uses: crazy-max/ghaction-github-pages@v3.1.0
