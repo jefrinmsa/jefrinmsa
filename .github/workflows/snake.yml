@@ -28,7 +28,7 @@ jobs:
           def fetch_weeks():
               query = '''query($login:String!){user(login:$login){contributionsCollection{
                 contributionCalendar{weeks{contributionDays{date contributionCount}}}
-              }}}}'''
+              }}}'''
               payload = json.dumps({"query": query, "variables": {"login": os.environ["PROFILE_USER"]}})
               request = Request("https://api.github.com/graphql", data=payload.encode(), headers={
                   "Authorization": "Bearer " + os.environ["GH_TOKEN"],
